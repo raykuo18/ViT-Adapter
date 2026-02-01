@@ -4,9 +4,7 @@ import math
 
 import torch.nn as nn
 import torch.nn.functional as F
-from mmcv.runner import load_checkpoint
-from mmseg.models.builder import BACKBONES
-from mmseg.utils import get_root_logger
+from mmseg_custom.utils.compat import BACKBONES, get_root_logger, load_checkpoint
 from timm.models.layers import trunc_normal_
 
 from .base.vit import TIMMVisionTransformer

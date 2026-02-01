@@ -17,9 +17,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
-from mmcv_custom import load_checkpoint
-from mmseg.models.builder import BACKBONES
-from mmseg.utils import get_root_logger
+from mmseg_custom.utils.compat import BACKBONES, get_root_logger, load_checkpoint
 from timm.models.layers import drop_path, to_2tuple, trunc_normal_
 
 

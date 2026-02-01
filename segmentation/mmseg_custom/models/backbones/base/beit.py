@@ -17,9 +17,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as cp
-from mmcv_custom import load_checkpoint
-from mmseg.models.builder import BACKBONES
-from mmseg.utils import get_root_logger
+from mmseg_custom.utils.compat import BACKBONES, get_root_logger, load_checkpoint
 from timm.models.layers import drop_path, to_2tuple, trunc_normal_
 
 
@@ -113,7 +111,50 @@ class Attention(nn.Module):
         self.proj = nn.Linear(all_head_dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def forward(self, x, rel_pos_bias=None):
+    def _get_relative_position_bias(self, H, W, device, dtype):
+        Wh, Ww = self.window_size
+        num_heads = self.relative_position_bias_table.shape[1]
+
+        # Fast path: original window size.
+        if (H, W) == (Wh, Ww):
+            relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
+                Wh * Ww + 1, Wh * Ww + 1, -1
+            )
+            return relative_position_bias.permute(2, 0, 1).contiguous()
+
+        # Interpolate relative position bias table for new (H, W).
+        bias_table = self.relative_position_bias_table
+        if bias_table.shape[0] < 4:
+            return None
+
+        bias_tokens = bias_table[:-3]
+        special_bias = bias_table[-3:]
+
+        bias_tokens = bias_tokens.view(2 * Wh - 1, 2 * Ww - 1, num_heads).permute(2, 0, 1).unsqueeze(0)
+        bias_tokens = F.interpolate(bias_tokens, size=(2 * H - 1, 2 * W - 1), mode="bicubic", align_corners=False)
+        bias_tokens = bias_tokens.squeeze(0).permute(1, 2, 0).contiguous().view(-1, num_heads)
+        bias_table = torch.cat([bias_tokens, special_bias], dim=0)
+
+        coords_h = torch.arange(H, device=device)
+        coords_w = torch.arange(W, device=device)
+        coords = torch.stack(torch.meshgrid(coords_h, coords_w, indexing="ij"))
+        coords_flatten = torch.flatten(coords, 1)
+        relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]
+        relative_coords = relative_coords.permute(1, 2, 0).contiguous()
+        relative_coords[:, :, 0] += H - 1
+        relative_coords[:, :, 1] += W - 1
+        relative_coords[:, :, 0] *= 2 * W - 1
+
+        relative_position_index = torch.zeros((H * W + 1, H * W + 1), dtype=relative_coords.dtype, device=device)
+        relative_position_index[1:, 1:] = relative_coords.sum(-1)
+        relative_position_index[0, 0:] = bias_table.shape[0] - 3
+        relative_position_index[0:, 0] = bias_table.shape[0] - 2
+        relative_position_index[0, 0] = bias_table.shape[0] - 1
+
+        relative_position_bias = bias_table[relative_position_index.view(-1)].view(H * W + 1, H * W + 1, -1)
+        return relative_position_bias.permute(2, 0, 1).contiguous()
+
+    def forward(self, x, rel_pos_bias=None, H=None, W=None):
         B, N, C = x.shape
         qkv_bias = None
         if self.q_bias is not None:
@@ -127,12 +168,19 @@ class Attention(nn.Module):
         attn = (q @ k.transpose(-2, -1))
 
         if self.relative_position_bias_table is not None:
-            relative_position_bias = \
-                self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
-                    self.window_size[0] * self.window_size[1] + 1,
-                    self.window_size[0] * self.window_size[1] + 1, -1)  # Wh*Ww,Wh*Ww,nH
-            relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
-            # relative_position_bias = relative_position_bias[:, 1:, 1:]
+            if H is not None and W is not None:
+                relative_position_bias = self._get_relative_position_bias(H, W, x.device, x.dtype)
+            else:
+                relative_position_bias = None
+            if relative_position_bias is None:
+                relative_position_bias = (
+                    self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
+                        self.window_size[0] * self.window_size[1] + 1,
+                        self.window_size[0] * self.window_size[1] + 1,
+                        -1,
+                    )
+                )
+                relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()
             attn = attn + relative_position_bias.unsqueeze(0)
 
         if rel_pos_bias is not None:
@@ -173,10 +221,10 @@ class Block(nn.Module):
     def forward(self, x, H, W, rel_pos_bias=None):
         def _inner_forward(x):
             if self.gamma_1 is None:
-                x = x + self.drop_path(self.attn(self.norm1(x), rel_pos_bias=rel_pos_bias))
+                x = x + self.drop_path(self.attn(self.norm1(x), rel_pos_bias=rel_pos_bias, H=H, W=W))
                 x = x + self.drop_path(self.mlp(self.norm2(x)))
             else:
-                x = x + self.drop_path(self.gamma_1 * self.attn(self.norm1(x), rel_pos_bias=rel_pos_bias))
+                x = x + self.drop_path(self.gamma_1 * self.attn(self.norm1(x), rel_pos_bias=rel_pos_bias, H=H, W=W))
                 x = x + self.drop_path(self.gamma_2 * self.mlp(self.norm2(x)))
             return x
 

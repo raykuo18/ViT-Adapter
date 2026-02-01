@@ -4,8 +4,7 @@ import math
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint as cp
-from mmcv.runner import load_checkpoint
-from mmseg.utils import get_root_logger
+from mmseg_custom.utils.compat import get_root_logger, load_checkpoint
 from timm.models.layers import DropPath
 from torch import nn
 

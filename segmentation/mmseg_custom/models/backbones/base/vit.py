@@ -30,9 +30,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as cp
-from mmcv.runner import BaseModule
-from mmcv_custom import my_load_checkpoint as load_checkpoint
-from mmseg.utils import get_root_logger
+from mmseg_custom.utils.compat import BaseModule, get_root_logger, load_checkpoint
 from timm.models.layers import DropPath, Mlp, to_2tuple
 
 
@@ -295,9 +293,9 @@ class TIMMVisionTransformer(BaseModule):
 
         window_attn = [window_attn] * depth if not isinstance(window_attn, list) else window_attn
         window_size = [window_size] * depth if not isinstance(window_size, list) else window_size
-        logging.info('window attention:', window_attn)
-        logging.info('window size:', window_size)
-        logging.info('layer scale:', layer_scale)
+        logging.info("window attention: %s", window_attn)
+        logging.info("window size: %s", window_size)
+        logging.info("layer scale: %s", layer_scale)
 
         self.patch_embed = embed_layer(
             img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim)
